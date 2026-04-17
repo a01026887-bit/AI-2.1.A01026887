@@ -81,17 +81,46 @@ tasa_libre = st.sidebar.number_input(
 # ============================================================
 @st.cache_data(ttl=3600)
 def descargar_datos(ticker, anios):
-    """Descarga datos históricos desde Yahoo Finance."""
+    """Descarga datos históricos desde Yahoo Finance (versión robusta)."""
     fin = datetime.today()
     inicio = fin - timedelta(days=365 * anios)
-    df = yf.download(ticker, start=inicio, end=fin, progress=False, auto_adjust=True)
 
-    # Limpieza: aplanar columnas si vienen como MultiIndex
+    # Intento 1: yf.download
+    try:
+        df = yf.download(
+            ticker,
+            start=inicio,
+            end=fin,
+            progress=False,
+            auto_adjust=True,
+            threads=False,
+        )
+    except Exception as e:
+        st.warning(f"yf.download falló: {e}. Intentando con Ticker.history...")
+        df = pd.DataFrame()
+
+    # Intento 2: si viene vacío, usar Ticker.history
+    if df is None or df.empty:
+        try:
+            df = yf.Ticker(ticker).history(period=f"{anios}y", auto_adjust=True)
+        except Exception as e:
+            st.error(f"No se pudo descargar {ticker}: {e}")
+            return pd.DataFrame()
+
+    # Aplanar MultiIndex de columnas
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # Eliminar valores faltantes
-    df = df.dropna()
+    # Asegurar que exista la columna Close
+    if "Close" not in df.columns:
+        if "Adj Close" in df.columns:
+            df["Close"] = df["Adj Close"]
+        else:
+            st.error(f"Los datos de {ticker} no contienen columna de precios.")
+            return pd.DataFrame()
+
+    # Limpieza final
+    df = df[["Close"]].dropna()
     return df
 
 with st.spinner(f"Descargando datos de {ticker}..."):
